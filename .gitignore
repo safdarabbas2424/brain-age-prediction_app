@@ -1,0 +1,6 @@
+model/best_swin_model.pth
+*.pth
+__pycache__/
+.DS_Store
+temp.hdr
+temp.img
