@@ -5,34 +5,54 @@ import timm
 import nibabel as nib
 import numpy as np
 import torch.nn as nn
-import matplotlib.pyplot as plt
+import urllib.request
 
 from PIL import Image
-from glob import glob
 from torchvision import transforms
 
 
 # -----------------------------
-# 1. Device
+# Device
 # -----------------------------
-device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 # -----------------------------
-# 2. Model class
+# Model download settings
+# -----------------------------
+MODEL_DIR = "model"
+MODEL_PATH = os.path.join(MODEL_DIR, "best_swin_model.pth")
+MODEL_URL = "https://drive.google.com/uc?export=download&id=1OAW3tNWuMnNBSF4z6viKhjw8xr8c9UtG"
+
+
+# -----------------------------
+# Download model if not exists
+# -----------------------------
+def download_model():
+    os.makedirs(MODEL_DIR, exist_ok=True)
+
+    if not os.path.exists(MODEL_PATH):
+        print("Downloading model...")
+        urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+        print("Model downloaded successfully.")
+
+    return MODEL_PATH
+
+
+# -----------------------------
+# Swin Transformer Model
 # -----------------------------
 class SwinAgePredictor(nn.Module):
     def __init__(self):
         super().__init__()
         self.backbone = timm.create_model(
             "swin_base_patch4_window7_224",
-            pretrained=False,
+            pretrained=True,
             num_classes=0
         )
         self.head = nn.Sequential(
             nn.Linear(self.backbone.num_features * 3, 128),
             nn.ReLU(),
-            nn.Dropout(0.3),
             nn.Linear(128, 1)
         )
 
@@ -45,20 +65,21 @@ class SwinAgePredictor(nn.Module):
 
 
 # -----------------------------
-# 3. Load saved model
+# Load model
 # -----------------------------
-MODEL_PATH = "best_swin_model.pth"
+def load_model():
+    model_path = download_model()
 
-model = SwinAgePredictor()
-model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
-model.to(device)
-model.eval()
+    model = SwinAgePredictor()
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.to(device)
+    model.eval()
 
-print("Model loaded successfully.")
+    return model
 
 
 # -----------------------------
-# 4. Transform
+# Transform
 # -----------------------------
 transform = transforms.Compose([
     transforms.ToTensor(),
@@ -70,10 +91,10 @@ transform = transforms.Compose([
 
 
 # -----------------------------
-# 5. Load MRI and extract slices
+# Load MRI and extract slices
 # -----------------------------
-def load_and_extract_slices(hdr_path):
-    img = nib.load(hdr_path)
+def load_and_extract_slices(file_path):
+    img = nib.load(file_path)
     data = np.squeeze(img.get_fdata())
 
     axial = data[:, :, data.shape[2] // 2]
@@ -84,7 +105,7 @@ def load_and_extract_slices(hdr_path):
 
 
 # -----------------------------
-# 6. Preprocess one slice
+# Preprocess slice
 # -----------------------------
 def preprocess_slice(slice_img, size=224):
     slice_img = np.nan_to_num(slice_img)
@@ -95,10 +116,12 @@ def preprocess_slice(slice_img, size=224):
 
 
 # -----------------------------
-# 7. Prediction function
+# Predict brain age
 # -----------------------------
-def predict_brain_age(hdr_path):
-    axial, coronal, sagittal = load_and_extract_slices(hdr_path)
+def predict_brain_age(file_path):
+    model = load_model()
+
+    axial, coronal, sagittal = load_and_extract_slices(file_path)
 
     axial_img = transform(preprocess_slice(axial)).unsqueeze(0).to(device)
     coronal_img = transform(preprocess_slice(coronal)).unsqueeze(0).to(device)
@@ -108,31 +131,3 @@ def predict_brain_age(hdr_path):
         predicted_age = model(axial_img, coronal_img, sagittal_img).item()
 
     return predicted_age
-
-
-# -----------------------------
-# 8. Visualize slices (optional)
-# -----------------------------
-def show_slices(hdr_path):
-    axial, coronal, sagittal = load_and_extract_slices(hdr_path)
-
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    axes[0].imshow(axial.T, cmap="gray", origin="lower")
-    axes[0].set_title("Axial")
-    axes[1].imshow(coronal.T, cmap="gray", origin="lower")
-    axes[1].set_title("Coronal")
-    axes[2].imshow(sagittal.T, cmap="gray", origin="lower")
-    axes[2].set_title("Sagittal")
-    plt.tight_layout()
-    plt.show()
-
-
-# -----------------------------
-# 9. Test on one MRI file
-# -----------------------------
-sample_hdr = "/Users/safdarabbas/Downloads/Data MRI/disc1/OAS1_0001_MR1/PROCESSED/MPRAGE/T88_111/OAS1_0001_MR1_mpr_n4_anon_111_t88_gfc.hdr"
-
-show_slices(sample_hdr)
-
-predicted_age = predict_brain_age(sample_hdr)
-print(f"Predicted Brain Age: {predicted_age:.2f} years")
